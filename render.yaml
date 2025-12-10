@@ -1,0 +1,18 @@
+services:
+  - type: cron
+    name: notification-agent
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m linkedin_sms_agent.main --method email
+    schedule: "*/15 * * * *"  # Every 15 minutes
+    envVars:
+      - key: DB_PATH
+        value: /opt/render/project/src/agent_state.db
+      - key: LOG_LEVEL
+        value: INFO
+      - key: NOTIFICATION_METHOD
+        value: email
+      # Add all other environment variables in Render dashboard
+      # DO NOT put secrets in this file - use Render's environment variables UI
+
