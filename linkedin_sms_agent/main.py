@@ -56,24 +56,39 @@ def run_once(args=None) -> None:
             clear_seen_items(conn, source="email")
             logger.info("Email seen items cleared.")
         
-        # For automatic 15-minute runs, we fetch UNREAD emails from last 15 minutes
-        # Scheduling is handled by cron (every 15 minutes) - no need to check last_run
-        minutes_back = int(os.getenv("EMAIL_CHECK_MINUTES", "15"))  # Default 15 minutes
-        
-        logger.info(f"Starting notification fetch (checking last {minutes_back} minutes for UNREAD emails)...")
-        
+        # Get last run time - only process emails that arrived AFTER last run
+        # This ensures we ignore all old unread emails and only process new ones
+        last_run_str = get_meta(conn, "last_run")
+        if last_run_str:
+            try:
+                # Parse last_run as UTC datetime
+                last_run = datetime.fromisoformat(last_run_str.replace("Z", "+00:00"))
+                # Convert to naive UTC for comparison
+                last_run = last_run.replace(tzinfo=None)
+                # Use last_run as the cutoff - only emails AFTER this time
+                logger.info(f"Last run was at {last_run.isoformat()}, only fetching UNREAD emails that arrived AFTER this time")
+            except Exception as e:
+                logger.warning(f"Could not parse last_run '{last_run_str}': {e}, using 15 minute window")
+                last_run = datetime.utcnow() - timedelta(minutes=15)
+        else:
+            # First run - only get emails from last 15 minutes to avoid processing old emails
+            last_run = datetime.utcnow() - timedelta(minutes=15)
+            logger.info(f"No previous run found, only fetching UNREAD emails from last 15 minutes (ignoring older unread emails)")
+
+        logger.info("Starting notification fetch (fetching top 10 UNREAD emails per account since last run)...")
+
         # Fetch email notifications from all configured accounts
-        # Get UNREAD emails from last 15 minutes, skip filters
+        # Get top 10 UNREAD emails (newest first) that arrived since last run
         all_email_notifications = []
         logger.info(f"Monitoring {len(config.email_accounts)} email account(s)...")
-        
+
         for email_config in config.email_accounts:
-            logger.info(f"Fetching UNREAD emails from {email_config.username}...")
+            logger.info(f"Fetching top 10 UNREAD emails from {email_config.username} (since last run)...")
             try:
                 account_emails = fetch_notifications(
                     email_config, 
-                    minutes_back=minutes_back,
-                    skip_filters=True  # Get all unread emails, no filtering
+                    skip_filters=True,  # Get all unread emails, no filtering
+                    since_date=last_run  # Only emails since last run
                 )
                 logger.info(f"Found {len(account_emails)} unread emails from {email_config.username}")
                 all_email_notifications.extend(account_emails)
@@ -91,8 +106,7 @@ def run_once(args=None) -> None:
             rss_items = fetch_items(config.rss)
             logger.info(f"Found {len(rss_items)} RSS items")
         
-        # Since we're fetching UNREAD emails, we still check database to avoid duplicates
-        # But we process all unread emails from the time window
+        # Check database to filter out emails we've already processed
         seen_ids = get_seen_ids(conn)
         
         # Filter to new items (not seen before)
@@ -106,22 +120,39 @@ def run_once(args=None) -> None:
         ]
         
         total_new = len(new_emails) + len(new_rss)
+        
+        # Log what we found
         logger.info(
-            f"Found {total_new} new unread items "
-            f"({len(new_emails)} emails, {len(new_rss)} RSS items)"
+            f"Database check: Found {len(email_notifications)} unread emails total, "
+            f"{len(new_emails)} are NEW (not in database), "
+            f"{len(email_notifications) - len(new_emails)} already processed"
         )
         
+        # CRITICAL: Only proceed if we have NEW unread emails
         if total_new == 0:
-            logger.info("No new unread items found; exiting.")
+            logger.info(
+                f"No NEW unread items found (all {len(email_notifications)} unread emails were already processed). "
+                f"Exiting without calling LLM."
+            )
             conn.close()
             return
+        
+        logger.info(
+            f"Proceeding with {total_new} NEW unread items "
+            f"({len(new_emails)} emails, {len(new_rss)} RSS items) to summarize"
+        )
         
         # Sort by timestamp (newest first)
         new_emails.sort(key=lambda e: e.received_at, reverse=True)
         new_rss.sort(key=lambda r: r.published_at, reverse=True)
         
-        # Summarize using LLM
-        logger.info("Summarizing notifications with LLM...")
+        # Summarize using LLM - only called if we have new emails
+        if not new_emails and not new_rss:
+            logger.warning("No new items to summarize (this should not happen - check logic)")
+            conn.close()
+            return
+        
+        logger.info(f"Calling LLM to summarize {len(new_emails)} emails and {len(new_rss)} RSS items...")
         try:
             llm_client = _create_llm_client(config)
             summary = summarize_notifications(
@@ -322,7 +353,8 @@ def run_once(args=None) -> None:
             [(item.id, "rss") for item in new_rss]
         )
         mark_seen(conn, items_to_mark)
-        # Note: We don't update last_run anymore since we use time-based window
+        # Update last_run timestamp so next run only processes emails since now
+        set_meta(conn, "last_run", datetime.utcnow().isoformat() + "Z")
         conn.close()
         
         logger.info("Run completed successfully.")

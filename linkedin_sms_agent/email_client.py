@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta
 from email.header import decode_header
 from typing import List, Optional, Tuple
+from datetime import datetime
 from html import unescape
 
 from .config import EmailConfig
@@ -183,19 +184,19 @@ def _matches_filters(sender: str, subject: str, config: EmailConfig) -> bool:
 
 def fetch_notifications(
     config: EmailConfig,
-    minutes_back: int = 15,
-    skip_filters: bool = False
+    skip_filters: bool = False,
+    since_date: Optional[datetime] = None
 ) -> List[EmailNotification]:
     """
-    Fetch UNREAD email notifications from the last N minutes.
+    Fetch the top 10 UNREAD email notifications (newest first) that arrived since a given date.
     
     Args:
         config: Email configuration.
-        minutes_back: Number of minutes to look back for emails (default: 15).
         skip_filters: If True, skip filter matching and return all unread emails.
+        since_date: Optional datetime. Only fetch emails that arrived after this date.
         
     Returns:
-        List of EmailNotification objects (unread emails from last N minutes).
+        List of EmailNotification objects (top 10 unread emails, newest first).
     """
     notifications = []
     mail = None
@@ -268,50 +269,86 @@ def fetch_notifications(
             mail.logout()
             return []
         
-        # Build IMAP search criteria for UNREAD emails from last N minutes
+        # Build IMAP search criteria for UNREAD emails
+        # CRITICAL: UNSEEN flag ensures we ONLY get unread emails
         search_criteria = ["UNSEEN"]  # Only unread emails
         
-        # Calculate date for last N minutes
-        minutes_ago = datetime.utcnow() - timedelta(minutes=minutes_back)
-        date_str = minutes_ago.strftime("%d-%b-%Y")
-        search_criteria.append(f"SINCE {date_str}")
-        
-        logger.info(f"Searching for UNREAD emails since {date_str} (last {minutes_back} minutes) from {config.username}")
-        
-        # Search for unread messages
+        # Add time filter if provided - only get emails that arrived AFTER since_date
+        # This ensures we ignore old unread emails and only process new ones
+        if since_date:
+            # IMAP SINCE uses date format, but we need to be precise
+            # Use the date from since_date, but IMAP will include all emails on that date
+            # To be more precise, we'll filter by date and then check timestamps in Python
+            date_str = since_date.strftime("%d-%b-%Y")
+            search_criteria.append(f"SINCE {date_str}")
+            logger.info(
+                f"Searching for top 10 UNREAD (UNSEEN) emails that arrived AFTER {since_date.isoformat()} "
+                f"(since {date_str}) from {config.username}"
+            )
+        else:
+            logger.info(f"Searching for top 10 UNREAD (UNSEEN) emails from {config.username} (no time filter)")
+
+        # Search for unread messages only (no time filter)
         search_query = " ".join(search_criteria)
         status, message_numbers = mail.search(None, search_query)
-        
+
         if status != "OK" or not message_numbers[0]:
+            logger.info(f"No UNREAD emails found from {config.username}")
             mail.close()
             mail.logout()
             return []
         
         message_ids = message_numbers[0].split()
+        total_unread_found = len(message_ids)
         
-        # Reverse to get newest first, then limit to max_emails_per_fetch
-        message_ids.reverse()
-        total_found = len(message_ids)
+        # IMAP returns UIDs in ascending order (oldest first)
+        # Reverse to get newest first, then take top 10
+        message_ids.reverse()  # Now newest first
         max_emails = getattr(config, 'max_emails_per_fetch', 10)
-        if total_found > max_emails:
+        
+        # Limit to top 10 unread emails (newest first)
+        if total_unread_found > max_emails:
             message_ids = message_ids[:max_emails]
-            logger.info(f"Found {total_found} emails, limiting to {max_emails} most recent from {config.username}")
+            logger.info(
+                f"Found {total_unread_found} UNREAD emails from {config.username}, "
+                f"limiting to top {max_emails} most recent (newest first)"
+            )
         else:
-            logger.info(f"Found {total_found} emails to process from {config.username}")
+            logger.info(
+                f"Found {total_unread_found} UNREAD emails from {config.username} "
+                f"(all will be processed, within limit of {max_emails})"
+            )
         
         if not message_ids:
-            logger.debug(f"No emails found matching criteria for {config.username}")
+            logger.debug(f"No UNREAD emails to process for {config.username}")
             mail.close()
             mail.logout()
             return []
         
-        logger.info(f"Found {len(message_ids)} emails to process from {config.username}")
+        logger.info(f"Processing top {len(message_ids)} UNREAD emails (newest first) from {config.username}")
         
-        # Process each message and apply filters
+        # Process each message - verify it's still unread before processing
+        # This prevents processing emails that were read between search and fetch
         processed = 0
+        skipped_read = 0
         for msg_id in message_ids:
             try:
-                # Fetch message
+                # Double-check that email is still unread before processing
+                status, msg_data_flags = mail.fetch(msg_id, "(FLAGS)")
+                if status != "OK":
+                    logger.debug(f"Failed to fetch flags for message {msg_id}")
+                    continue
+                
+                flags_str = msg_data_flags[0][0].decode() if isinstance(msg_data_flags[0][0], bytes) else str(msg_data_flags[0][0])
+                is_unread = "\\Seen" not in flags_str
+                
+                if not is_unread:
+                    logger.debug(f"Email {msg_id} was marked as read between search and fetch, skipping.")
+                    skipped_read += 1
+                    processed += 1
+                    continue
+                
+                # Fetch full message content
                 status, msg_data = mail.fetch(msg_id, "(RFC822)")
                 
                 if status != "OK":
@@ -355,7 +392,20 @@ def fetch_notifications(
                 received_dt = _parse_date(date_header)
                 if not received_dt:
                     received_dt = datetime.utcnow()
-                
+
+                # CRITICAL: Filter out emails that arrived before since_date
+                # IMAP SINCE includes the entire day, so we need to filter by exact time
+                if since_date:
+                    # Convert received_dt to naive UTC for comparison
+                    received_naive = received_dt.replace(tzinfo=None) if received_dt.tzinfo else received_dt
+                    if received_naive <= since_date:
+                        logger.debug(
+                            f"Skipping email {unique_id[:40]}... - received {received_naive.isoformat()} "
+                            f"is before cutoff {since_date.isoformat()}"
+                        )
+                        processed += 1
+                        continue
+
                 received_at = received_dt.isoformat() + "Z"
                 
                 notifications.append(EmailNotification(
@@ -386,7 +436,16 @@ def fetch_notifications(
         except Exception as e:
             logger.debug(f"Error logging out (connection may be closed): {e}")
         
-        logger.info(f"Extracted {len(notifications)} matching emails from {config.username}")
+        if skipped_read > 0:
+            logger.info(
+                f"Extracted {len(notifications)} emails from {config.username} "
+                f"(processed {len(message_ids)} emails, {skipped_read} were read between search/fetch, top {max_emails} limit applied)"
+            )
+        else:
+            logger.info(
+                f"Extracted {len(notifications)} emails from {config.username} "
+                f"(processed {len(message_ids)} UNREAD emails, top {max_emails} limit applied)"
+            )
         
     except Exception as e:
         logger.error(f"Error fetching email notifications from {config.username}: {e}", exc_info=True)

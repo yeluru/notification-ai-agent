@@ -1,6 +1,6 @@
 # Deployment Guide - Render.com
 
-This guide explains how to deploy the Notification Agent (Email & SMS) to Render.com as a cron job.
+This guide explains how to deploy the Notification Agent to Render.com as a cron job. The agent supports both **email and SMS** notifications.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ This guide explains how to deploy the Notification Agent (Email & SMS) to Render
    ```bash
    git init
    git add .
-   git commit -m "Initial commit: Email notification agent"
+   git commit -m "Initial commit: Notification agent (Email & SMS)"
    ```
 
 2. Create a new repository on GitHub
