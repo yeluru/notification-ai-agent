@@ -118,3 +118,4 @@ class GenericHTTPLLMClient(LLMClient):
             logger.error(f"HTTP LLM API error: {e}")
             raise
 
+

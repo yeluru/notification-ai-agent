@@ -1,0 +1,28 @@
+Initial commit: Multi-source notification agent
+
+Features:
+- Email monitoring via IMAP (multiple accounts)
+- RSS feed support
+- LLM-powered summarization (OpenAI compatible)
+- SMS notifications via Twilio
+- Email notifications via SMTP
+- SQLite-based state management
+- Automatic scheduling (cron/launchd)
+- Time-based filtering (only new emails since last run)
+
+Architecture:
+- Clean Python package structure
+- Configurable via environment variables
+- Production-ready error handling
+- Comprehensive logging
+
+Documentation:
+- README with setup instructions
+- AWS architecture design for multi-tenant deployment
+- Deployment plan for AWS
+- Local setup guide for macOS
+
+Security:
+- No hardcoded credentials
+- .env file excluded from git
+- Database files excluded from git

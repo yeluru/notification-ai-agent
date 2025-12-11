@@ -182,3 +182,4 @@ If you're using a virtual environment, update the plist or crontab to use the ve
 
 **Use launchd** - It's more reliable on macOS, handles system restarts better, and provides better logging.
 
+

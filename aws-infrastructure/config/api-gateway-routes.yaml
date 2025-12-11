@@ -1,0 +1,97 @@
+# API Gateway Route Configuration
+# This file documents the API routes for reference
+
+routes:
+  # Authentication
+  - path: /auth/signup
+    method: POST
+    lambda: user-management
+    description: Create new user account
+    
+  - path: /auth/login
+    method: POST
+    lambda: user-management
+    description: Authenticate user
+    
+  - path: /auth/refresh
+    method: POST
+    lambda: user-management
+    description: Refresh JWT token
+    
+  # User Management
+  - path: /users/me
+    method: GET
+    lambda: user-management
+    description: Get current user profile
+    auth: required
+    
+  - path: /users/me
+    method: PUT
+    lambda: user-management
+    description: Update user profile
+    auth: required
+    
+  # Data Sources
+  - path: /data-sources
+    method: GET
+    lambda: data-source-config
+    description: List all data sources
+    auth: required
+    
+  - path: /data-sources
+    method: POST
+    lambda: data-source-config
+    description: Add new data source
+    auth: required
+    
+  - path: /data-sources/{id}
+    method: PUT
+    lambda: data-source-config
+    description: Update data source
+    auth: required
+    
+  - path: /data-sources/{id}
+    method: DELETE
+    lambda: data-source-config
+    description: Delete data source
+    auth: required
+    
+  - path: /data-sources/{id}/test
+    method: POST
+    lambda: data-source-config
+    description: Test data source connection
+    auth: required
+    
+  # Notifications
+  - path: /notifications
+    method: GET
+    lambda: status-check
+    description: Get recent notifications
+    auth: required
+    
+  # Statistics & Status
+  - path: /stats
+    method: GET
+    lambda: status-check
+    description: Get statistics
+    auth: required
+    
+  - path: /status
+    method: GET
+    lambda: status-check
+    description: Get system status
+    auth: required
+    
+  # Settings
+  - path: /settings
+    method: GET
+    lambda: user-management
+    description: Get user settings
+    auth: required
+    
+  - path: /settings
+    method: PUT
+    lambda: user-management
+    description: Update user settings
+    auth: required
+
